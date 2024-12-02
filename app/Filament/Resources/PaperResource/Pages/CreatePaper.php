@@ -3,17 +3,13 @@
 namespace App\Filament\Resources\PaperResource\Pages;
 
 use App\Filament\Resources\PaperResource;
-use App\Jobs\NotifyEditorsOfNewPaper;
+use App\Mail\Visualbuilder\EmailTemplates\NewPaperSubmission;
 use App\Mail\Visualbuilder\EmailTemplates\PaperSubmissionConfirmation;
 use App\Models\User;
-use App\Notifications\PaperSubmittedNotification;
-use App\Notifications\SuperAdminEditorInChiefNotification;
 use Carbon\Carbon;
-use Filament\Actions;
 use Filament\Resources\Pages\CreateRecord;
 use Illuminate\Support\Facades\Mail;
 use Visualbuilder\EmailTemplates\Contracts\TokenHelperInterface;
-use Illuminate\Support\Facades\Notification;
 
 class CreatePaper extends CreateRecord
 {
@@ -38,10 +34,13 @@ class CreatePaper extends CreateRecord
             'date_of_submission' => $submissionDate,
         ];
 
-        $users = User::whereIn('role', ['super_admin', 'editor'])->get(); // Corrected array syntax
+        $roles = ['super_admin', 'editor']; // Define roles to target
+
+        // Get users by roles
+        $users = User::role($roles)->get();
+
         foreach ($users as $user) {
-            $superadminEditorName = $user->name; // Dynamic name for each user
-            Notification::send($user, new SuperAdminEditorInChiefNotification($this->record, $superadminEditorName));
+            Mail::to($user->email)->send(new NewPaperSubmission($paper, $tokenHelper));
         }
 
         Mail::to($this->record->author->email)->send(new PaperSubmissionConfirmation($paper, $tokenHelper));

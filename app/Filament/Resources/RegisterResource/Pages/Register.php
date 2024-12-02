@@ -53,27 +53,41 @@ class Register extends Page
 
     public function submit()
     {
-        $user = User::create([
-            'name' => $this->name,
-            'surname' => $this->surname,
-            'country' => $this->country,
-            'affiliation' => $this->affiliation,
-            'email' => $this->email,
-            'email' => $this->email,
-            'password' => Hash::make($this->password),
+        // Validate if the email already exists
+        $validatedData = $this->validate([
+            'email' => 'required|email|unique:users,email',
         ]);
-        $user->roles()->sync([1]);
 
-        $authorData = [
-            'name' => $user->name,
-            'surname' => $user->surname,
-            'email' => $user->email,
-            'affiliation' => $user->affiliation,
-        ];
+        try {
+            // Create the user
+            $user = User::create([
+                'name' => $this->name,
+                'surname' => $this->surname,
+                'country' => $this->country,
+                'affiliation' => $this->affiliation,
+                'email' => $this->email,
+                'password' => Hash::make($this->password),
+            ]);
 
-        // Send the notification
-        $user->notify(new AuthorRegistrationNotification($authorData));
-        session()->flash('success', 'Registration successful. You can now log in.');
-        return redirect('admin/login');
+            // Assign default roles
+            $user->roles()->sync([1]);
+
+            $authorData = [
+                'name' => $user->name,
+                'surname' => $user->surname,
+                'email' => $user->email,
+                'affiliation' => $user->affiliation,
+            ];
+
+            // Send the notification
+            $user->notify(new AuthorRegistrationNotification($authorData));
+
+            session()->flash('success', 'Registration successful. You can now log in.');
+            return redirect('admin/login');
+        } catch (\Exception $e) {
+            // If an exception occurs, flash an error message
+            session()->flash('error', 'An error occurred during registration. Please try again.');
+            return back();
+        }
     }
 }

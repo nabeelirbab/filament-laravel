@@ -33,7 +33,7 @@ class UserResource extends Resource
                 TextInput::make('email')
                     ->email()
                     ->required()
-                    ->maxLength(255),
+                    ->maxLength(255)->unique(ignoreRecord: true),
                 TextInput::make('surname')->label('Surname')->required()->maxLength(255),
                 Country::make('country'),
                 TextInput::make('affiliation')->label('Affiliation')->required()->maxLength(255),
@@ -41,8 +41,7 @@ class UserResource extends Resource
                     ->password()
                     ->required()
                     ->maxLength(255)
-                    ->dehydrateStateUsing(fn($state) => bcrypt($state))
-                    ->visible(fn($livewire) => $livewire instanceof Pages\CreateUser),
+                    ->dehydrateStateUsing(fn($state) => bcrypt($state)),
                 Select::make('roles')
                     ->multiple()
                     ->relationship('roles', 'name') // This dropdown shows roles
@@ -77,6 +76,12 @@ class UserResource extends Resource
             ->bulkActions([
                 Tables\Actions\DeleteBulkAction::make(),
             ]);
+    }
+
+    public static function beforeDelete(User $record): void
+    {
+        // Nullify associate_editor_id in papers before deletion
+        $record->papersAsEditor()->update(['associate_editor_id' => null]);
     }
     public static function afterSave(Form $form, $record)
     {

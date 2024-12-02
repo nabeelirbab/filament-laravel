@@ -16,7 +16,8 @@ class Paper extends Model
         'file_path',
         'author_id',
         'keywords',
-        'fields'
+        'fields',
+        'revision_file'
     ];
 
     protected $casts = [
@@ -37,9 +38,9 @@ class Paper extends Model
         return $this->belongsTo(User::class, 'author_id');
     }
 
-    public function coAuthors()
+    public function associateEditor()
     {
-        return $this->belongsToMany(User::class, 'paper_user', 'paper_id', 'user_id');
+        return $this->belongsTo(User::class, 'associate_editor_id');
     }
 
     public function reviews()

@@ -3,6 +3,7 @@
 namespace App\Filament\Resources;
 
 use App\Filament\Resources\ReviewResource\Pages;
+use App\Mail\Visualbuilder\EmailTemplates\ReviewCompleted;
 use App\Models\Review;
 use App\Models\User;
 use App\Notifications\ReviewCompletedNotification;
@@ -13,6 +14,8 @@ use Filament\Tables;
 use Filament\Tables\Table;
 use Filament\Tables\Actions\Action;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Facades\Mail;
+use Visualbuilder\EmailTemplates\Contracts\TokenHelperInterface;
 
 class ReviewResource extends Resource
 {
@@ -68,15 +71,23 @@ class ReviewResource extends Resource
                     ->label('Submit Review')
                     ->visible(fn($record) => auth()->user()->hasRole('referee') && $record->referee_id === auth()->id() && $record->decision === 'pending')
                     ->action(function ($record, $data) {
+                        $associateEditor = $record->paper->associateEditor;
                         $record->update([
                             'comments' => $data['comments'],
                             'decision' => $data['decision'],
                         ]);
 
+                        $tokenHelper = app(TokenHelperInterface::class);
+                        $review = (object) [
+                            'title' => $record->paper->title,
+                            'name' => $associateEditor->name,
+                            'email' => $associateEditor->email,
+                            'link' => url('/admin/reviews/' . $record->id),
+                        ];
                         // Notify Associate Editor that the review is complete
-                        $associateEditor = $record->paper->associate_editor;
+
                         if ($associateEditor) {
-                            $associateEditor->notify(new ReviewCompletedNotification($record));
+                            Mail::to($associateEditor->email)->send(new ReviewCompleted($review, $tokenHelper));
                         }
 
                         // Check if all reviews are completed

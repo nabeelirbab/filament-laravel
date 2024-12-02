@@ -19,6 +19,7 @@ use Illuminate\Session\Middleware\StartSession;
 use Illuminate\View\Middleware\ShareErrorsFromSession;
 use Althinect\FilamentSpatieRolesPermissions\FilamentSpatieRolesPermissionsPlugin;
 use App\Filament\Resources\RegisterResource\Pages\Register;
+use Filament\Facades\Filament;
 use Visualbuilder\EmailTemplates\EmailTemplatesPlugin;
 
 class AdminPanelProvider extends PanelProvider
@@ -31,6 +32,7 @@ class AdminPanelProvider extends PanelProvider
             ->path('admin')
             ->registration(Register::class)
             ->login()
+            ->passwordReset()
             ->colors([
                 'primary' => Color::Amber,
             ])
@@ -56,13 +58,18 @@ class AdminPanelProvider extends PanelProvider
             ->authMiddleware([
                 Authenticate::class,
             ]);
+        $panel = $panel
+            ->plugin(FilamentSpatieRolesPermissionsPlugin::make())
+            ->plugin(EmailTemplatesPlugin::make());
 
-        // Conditionally add plugins based on the user's role
-        if (auth()->check() && auth()->user()->hasRole('super_admin')) {
-            $panel = $panel
-                ->plugin(FilamentSpatieRolesPermissionsPlugin::make())
-                ->plugin(EmailTemplatesPlugin::make());
-        }
+        // Conditionally modify plugins after user authentication
+        // Filament::serving(function () use ($panel) {
+        //     if (auth()->check() && auth()->user()->hasRole('super_admin')) {
+        //         dd('gekk');
+        //         $panel->plugin(FilamentSpatieRolesPermissionsPlugin::make())
+        //             ->plugin(EmailTemplatesPlugin::make());
+        //     }
+        // });
 
         return $panel;
     }

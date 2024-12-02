@@ -1,5 +1,6 @@
 <?php
 
+use App\Filament\Resources\UploadRevisionResource\Pages\UploadRevision;
 use App\Http\Controllers\ReviewController;
 use Illuminate\Support\Facades\Route;
 
@@ -16,5 +17,8 @@ use Illuminate\Support\Facades\Route;
 
 Route::get('/review/reject/{review}', [ReviewController::class, 'rejectReview'])->name('review.reject');
 Route::get('/', function () {
-    return view('welcome');
+    return redirect('/admin/login');
 });
+// Route::get('/admin/upload-revision', UploadRevision::class)
+//     ->middleware(['auth', 'role:author'])
+//     ->name('author.upload-revision');

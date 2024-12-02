@@ -64,6 +64,7 @@ return [
     // Notifiable Models who can receive emails
     'recipients' => [
         '\\App\\Models\\User',
+        '\\App\\Models\\Paper',
     ],
 
     // Guards who are authorised to edit email templates
@@ -83,5 +84,6 @@ return [
         'user_verified'          => true,
         'login'                  => true,
         'password_reset_success' => true,
+        'request_reset'          => true,
     ],
 ];

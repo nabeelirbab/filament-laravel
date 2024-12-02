@@ -3,18 +3,16 @@
 namespace App\Filament\Resources;
 
 use App\Filament\Resources\PaperResource\Pages;
+use App\Mail\Visualbuilder\EmailTemplates\PaperAcceptedNotification as EmailTemplatesPaperAcceptedNotification;
+use App\Mail\Visualbuilder\EmailTemplates\PaperAssignedNotification as EmailTemplatesPaperAssignedNotification;
+use App\Mail\Visualbuilder\EmailTemplates\PaperMajorReview;
+use App\Mail\Visualbuilder\EmailTemplates\PaperMinorReview;
+use App\Mail\Visualbuilder\EmailTemplates\PaperNotAccepted;
+use App\Mail\Visualbuilder\EmailTemplates\RefereeAccess;
 use App\Models\Field;
 use App\Models\Paper;
 use App\Models\Review;
 use App\Models\User;
-use App\Notifications\PaperAcceptedNotification;
-use App\Notifications\PaperAssignedNotification;
-use App\Notifications\PaperDecisionNotification;
-use App\Notifications\PaperMajorReviewNotification;
-use App\Notifications\PaperMinorReviewNotification;
-use App\Notifications\PaperNotAcceptedNotification;
-use App\Notifications\RefereeAccessNotification;
-use App\Notifications\ReviewRequestNotification;
 use Filament\Forms;
 use Filament\Forms\Form;
 use Filament\Resources\Resource;
@@ -22,6 +20,8 @@ use Filament\Tables;
 use Filament\Tables\Table;
 use Filament\Tables\Actions\Action;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\Mail;
+use Visualbuilder\EmailTemplates\Contracts\TokenHelperInterface;
 
 class PaperResource extends Resource
 {
@@ -48,7 +48,12 @@ class PaperResource extends Resource
                     ->label('Paper File')
                     ->required()
                     ->acceptedFileTypes(['application/pdf', 'application/x-latex']),
-
+                // Conditional visibility for revision file upload
+                Forms\Components\FileUpload::make('revision_file')
+                    ->label('Upload Revision File')
+                    ->acceptedFileTypes(['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'])
+                    ->visible(fn($get) => $get('status') === 'ready_for_major_revision')
+                    ->helperText('Upload the revised file based on reviewer feedback'),
                 Forms\Components\CheckboxList::make('fields')
                     ->label('Fields')
                     ->options(Field::pluck('name', 'id')->toArray()) // Load field options dynamically
@@ -81,7 +86,14 @@ class PaperResource extends Resource
                         $record->associate_editor_id = $associateEditor->id;
                         $record->status = 'under_review';
                         $record->save();
-                        $associateEditor->notify(new PaperAssignedNotification($record));
+                        $tokenHelper = app(TokenHelperInterface::class);
+                        $paper = (object) [
+                            'title' => $record->title,
+                            'name' => $associateEditor->name,
+                            'email' => $associateEditor->email,
+                            'link' => url('/admin/papers/' . $record->id),
+                        ];
+                        Mail::to($associateEditor->email)->send(new EmailTemplatesPaperAssignedNotification($paper, $tokenHelper));
                     })
                     ->form([
                         Forms\Components\Select::make('associate_editor_id')
@@ -95,23 +107,53 @@ class PaperResource extends Resource
                 // Assign Referees or Quick Reject
                 Action::make('assignRefereesOrQuickReject')
                     ->label('Assign Referees / Quick Reject')
-                    ->visible(fn($record) => auth()->user()->hasRole('associate_editor') && $record->status === 'under_review')
+                    ->visible(fn($record) => auth()->user()->hasRole('associate_editor') && $record->status === 'under_review' || $record->status === 'ready_for_major_revision')
                     ->action(function ($record, $data) {
                         if ($data['decision'] === 'reject') {
+                            // Handle rejection
                             $record->status = 'rejected';
+                            $record->revision_comment = $data['revision_comment']; // Save the revision comment
                             $record->save();
-                            $record->author->notify(new PaperNotAcceptedNotification($record, 'Relevance or scope issues'));
+
+                            $tokenHelper = app(TokenHelperInterface::class);
+                            $paper = (object) [
+                                'title' => $record->title,
+                                'name' => $record->author->name,
+                                'reason' => $data['revision_comment'],
+                                'email' => $record->author->email,
+                                'comment' => $data['revision_comment'],
+                            ];
+                            Mail::to($record->author->email)->send(new PaperNotAccepted($paper, $tokenHelper));
                         } else {
+                            // Handle referee assignment
                             $record->status = 'under_review';
                             $record->save();
+
+                            $existingReferees = $record->reviews->pluck('referee_id')->toArray(); // Get already assigned referees
+
                             foreach ($data['referees'] as $refereeId) {
+                                if (in_array($refereeId, $existingReferees)) {
+                                    continue; // Skip already assigned referees
+                                }
+
                                 $referee = User::find($refereeId);
                                 $review = Review::create([
                                     'paper_id' => $record->id,
                                     'referee_id' => $referee->id,
                                     'comments' => 'Pending review comments',
                                 ]);
-                                $referee->notify(new RefereeAccessNotification($record, $referee, $review));
+
+                                $tokenHelper = app(TokenHelperInterface::class);
+                                $reviewData = (object) [
+                                    'title' => $record->title,
+                                    'name' => $referee->name,
+                                    'author' => $record->author->name,
+                                    'email' => $referee->email,
+                                    'abstract' => $record->abstract,
+                                    'accept_url' => url('admin/reviews/' . $review->id . '?paper_id=' . $record->id . '&referee_id=' . $referee->id),
+                                    'decline_url' => route('review.reject', $review),
+                                ];
+                                Mail::to($referee->email)->send(new RefereeAccess($reviewData, $tokenHelper));
                             }
                         }
                     })
@@ -122,7 +164,12 @@ class PaperResource extends Resource
                                 'assign' => 'Assign Referees',
                                 'reject' => 'Quick Reject',
                             ])
+                            ->reactive()
                             ->required(),
+                        Forms\Components\Textarea::make('revision_comment')
+                            ->label('Revision Comment')
+                            ->visible(fn($get) => $get('decision') === 'reject')
+                            ->required(fn($get) => $get('decision') === 'reject'),
                         Forms\Components\Select::make('referees')
                             ->label('Select Referees')
                             ->options(User::role('referee')->pluck('name', 'id'))
@@ -134,13 +181,14 @@ class PaperResource extends Resource
                     ->requiresConfirmation()
                     ->button(),
 
+
                 // Final Decision by Associate Editor
                 Action::make('finalDecision')
                     ->label('Make Final Decision')
                     ->visible(fn($record) => auth()->user()->hasRole('associate_editor') && $record->status === 'ready_for_decision')
                     ->action(function ($record, $data) {
                         $decision = $data['decision'];
-
+                        $revisionComment = $data['revision_comment'] ?? null;
                         // Update paper status based on the final decision
                         $record->status = match ($decision) {
                             'accepted' => 'accepted',
@@ -148,6 +196,8 @@ class PaperResource extends Resource
                             'major_revision' => 'ready_for_major_revision',
                             'rejected' => 'rejected',
                         };
+                        $record->revision_comment = $revisionComment;
+
                         $record->save();
 
                         // Update each review's status based on the paper's final decision
@@ -164,28 +214,50 @@ class PaperResource extends Resource
                         // Notify authors about the final decision
                         $record->load('author');
                         if ($record->author) {
+                            $tokenHelper = app(TokenHelperInterface::class);
+                            $paper = (object) [
+                                'title' => $record->title,
+                                'name' => $record->author->name,
+                                'email' => $record->author->email,
+                            ];
+                            $paperreject = (object) [
+                                'title' => $record->title,
+                                'name' => $record->author->name,
+                                'reason' => $revisionComment,
+                                'email' => $record->author->email,
+                            ];
+
+                            $paperminor = (object) [
+                                'title' => $record->title,
+                                'name' => $record->author->name,
+                                'revison' => $revisionComment,
+                                'email' => $record->author->email,
+                                'date' => now()->addDays(10)->format('d.m.Y'),
+                            ];
+
+                            $papermajor = (object) [
+                                'title' => $record->title,
+                                'name' => $record->author->name,
+                                'revison' => $revisionComment,
+                                'email' => $record->author->email,
+                                'link' => url('admin/papers/' . $record->id . '/edit'),
+                                'date' => now()->addDays(20)->format('d.m.Y'),
+                            ];
+
                             match ($decision) {
-                                'accepted' => $record->author->notify(new PaperAcceptedNotification($record)),
-                                'rejected' => $record->author->notify(new PaperNotAcceptedNotification($record, 'Relevance or scope issues')),
-                                'minor_revision' => $record->author->notify(new PaperMinorReviewNotification(
-                                    $record,
-                                    'Clarifying certain points and updating references',
-                                    now()->addDays(10)->format('d.m.Y')
-                                )),
-                                'major_revision' => $record->author->notify(new PaperMajorReviewNotification(
-                                    $record,
-                                    'Restructuring sections and adding more data',
-                                    now()->addDays(20)->format('d.m.Y')
-                                )),
+                                'accepted' => Mail::to($record->author->email)->send(new EmailTemplatesPaperAcceptedNotification($paper, $tokenHelper)),
+                                'rejected' => Mail::to($record->author->email)->send(new PaperNotAccepted($paperreject, $tokenHelper)),
+                                'minor_revision' => Mail::to($record->author->email)->send(new PaperMinorReview($paperminor, $tokenHelper)),
+                                'major_revision' => Mail::to($record->author->email)->send(new PaperMajorReview($papermajor, $tokenHelper)),
                             };
                         }
 
                         // Notify referees if revision is requested
-                        if (in_array($decision, ['minor_revision', 'major_revision'])) {
-                            foreach ($record->reviews as $review) {
-                                $review->referee->notify(new ReviewRequestNotification($record));
-                            }
-                        }
+                        // if (in_array($decision, ['minor_revision', 'major_revision'])) {
+                        //     foreach ($record->reviews as $review) {
+                        //         $review->referee->notify(new ReviewRequestNotification($record));
+                        //     }
+                        // }
                     })
                     ->form([
                         Forms\Components\Select::make('decision')
@@ -196,7 +268,18 @@ class PaperResource extends Resource
                                 'major_revision' => 'Major Revision',
                                 'rejected' => 'Reject',
                             ])
+                            ->reactive() // Ensure updates to this field trigger form reactivity
                             ->required(),
+
+                        Forms\Components\Textarea::make('revision_comment')
+                            ->label('Revision Comment')
+                            ->placeholder('Enter comments about required revisions...')
+                            ->rows(4)
+                            ->visible(fn($get) => $get('decision') === 'major_revision' || $get('decision') === 'minor_revision' || $get('decision') === 'rejected') // Conditional visibility
+                            ->required(fn($get) => $get('decision') === 'major_revision' || $get('decision') === 'minor_revision' || $get('decision') === 'rejected'),
+
+                        // Make it required for major revisions
+
                     ])
                     ->requiresConfirmation()
                     ->button(),
